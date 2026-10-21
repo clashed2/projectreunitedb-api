@@ -9,7 +9,7 @@ switch ($method) {
         // View all users or a single user by ?id=
         ob_clean();
         if (isset($_GET['id'])) {
-            $stmt = $pdo->prepare("SELECT id, name, username, email, phone_number, created_at FROM users WHERE id = :id");
+            $stmt = $pdo->prepare("SELECT id, name, username, email, phone_number FROM users WHERE id = :id");
             $stmt->execute(['id' => $_GET['id']]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
             
@@ -20,7 +20,7 @@ switch ($method) {
                 echo json_encode(["status" => "error", "message" => "User not found"]);
             }
         } else {
-            $stmt = $pdo->query("SELECT id, name, username, email, phone_number, created_at FROM users ORDER BY id DESC");
+            $stmt = $pdo->query("SELECT id, name, username, email, phone_number FROM users ORDER BY id DESC");
             $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
             echo json_encode(["status" => "success", "data" => $users]);
         }
