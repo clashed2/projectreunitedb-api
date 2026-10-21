@@ -99,4 +99,81 @@ switch ($method) {
             exit();
         }
         break;
+   case 'DELETE':
+        ob_clean();
+        $id = $_GET['id'] ?? null;
+        if (!$id) {
+            $content = file_get_contents("php://input");
+            $data = json_decode($content, true);
+            $id = $data['id'] ?? null;
+        }
+
+        if (!$id) {
+            http_response_code(400);
+            echo json_encode(["status" => "error", "message" => "Missing report ID for deletion"]);
+            exit();
+        }
+
+        try {
+            // 1. Fetch report to delete physical photo file if it exists
+            $stmtSelect = $pdo->prepare("SELECT photo_image FROM reports WHERE id = :id");
+            $stmtSelect->execute(['id' => $id]);
+            $report = $stmtSelect->fetch(PDO::FETCH_ASSOC);
+
+            if ($report) {
+                if (!empty($report['photo_image']) && file_exists('uploads/' . $report['photo_image'])) {
+                    unlink('uploads/' . $report['photo_image']);
+                }
+
+                // 2. Delete linked item row first
+                $stmtItem = $pdo->prepare("DELETE FROM items WHERE report_id = :id");
+                $stmtItem->execute(['id' => $id]);
+
+                // 3. Delete the report row
+                $stmtReport = $pdo->prepare("DELETE FROM reports WHERE id = :id");
+                $stmtReport->execute(['id' => $id]);
+
+                echo json_encode(["status" => "success", "message" => "Report deleted successfully"]);
+            } else {
+                http_response_code(404);
+                echo json_encode(["status" => "error", "message" => "Report not found"]);
+            }
+            exit();
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(["status" => "error", "message" => "Database Error: " . $e->getMessage()]);
+            exit();
+        }
+        break;
+
+    case 'PATCH':
+        ob_clean();
+        $id = $_GET['id'] ?? null;
+        $content = file_get_contents("php://input");
+        $data = json_decode($content, true);
+        if (!$id && isset($data['id'])) { $id = $data['id']; }
+
+        if (!$id) {
+            http_response_code(400);
+            echo json_encode(["status" => "error", "message" => "Missing report ID for update"]);
+            exit();
+        }
+
+        try {
+            $location = $data['location'] ?? null;
+            if ($location) {
+                $stmt = $pdo->prepare("UPDATE reports SET location = :loc, updated_at = NOW() WHERE id = :id");
+                $stmt->execute(['loc' => $location, 'id' => $id]);
+                echo json_encode(["status" => "success", "message" => "Report updated successfully"]);
+            } else {
+                http_response_code(400);
+                echo json_encode(["status" => "error", "message" => "No update fields provided"]);
+            }
+            exit();
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode(["status" => "error", "message" => "Database Error: " . $e->getMessage()]);
+            exit();
+        }
+        break;
 }
