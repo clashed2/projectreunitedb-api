@@ -5,10 +5,10 @@ require_once 'db.php';
 $method = $_SERVER['REQUEST_METHOD'];
 
 switch ($method) {
-   case 'GET':
+    case 'GET':
         ob_clean();
         if (isset($_GET['id'])) {
-            // Fetch a single report if ?id= is in the URL
+            // View a single report
             $query = "SELECT r.*, i.details_description, u.name as filed_by_user 
                       FROM reports r 
                       LEFT JOIN items i ON r.id = i.report_id 
@@ -25,7 +25,7 @@ switch ($method) {
                 echo json_encode(["status" => "error", "message" => "Report not found"]);
             }
         } else {
-            // Fetch all reports if no ID is provided
+            // View all reports feed
             $query = "SELECT r.*, i.details_description, u.name as filed_by_user 
                       FROM reports r 
                       LEFT JOIN items i ON r.id = i.report_id 
@@ -39,6 +39,7 @@ switch ($method) {
         break;
 
     case 'POST':
+        // Create a new report
         $content = file_get_contents("php://input");
         $data = json_decode($content, true);
         if (is_null($data)) { $data = $_POST; }
@@ -59,12 +60,10 @@ switch ($method) {
                 file_put_contents('uploads/' . $image_name, $image_data);
             }
 
-            // 1. Insert into 'reports' table (Matches your schema columns)
             $sql = "INSERT INTO reports (report_id, user_id_who_filed, date_filed, photo_image, location) 
                     VALUES (:report_id, :user_id, NOW(), :photo, :loc)";
             $stmt = $pdo->prepare($sql);
             
-            // Generate a unique string for the report_id VARCHAR column
             $readable_id = ($data['report_type'] ?? 'ITEM') . '-' . strtoupper(substr(uniqid(), -5));
             
             $stmt->execute([
@@ -74,18 +73,15 @@ switch ($method) {
                 'loc'       => $data['location']
             ]);
             
-            // Get the INT id of the report we just created
             $new_report_internal_id = $pdo->lastInsertId();
 
-            // 2. Insert into 'items' table (Matches your schema columns)
-            // We use the internal INT id as the foreign key 'report_id'
             $full_description = ($data['item_name'] ?? 'Unnamed') . " - " . ($data['description'] ?? '');
             
             $stmtItem = $pdo->prepare("INSERT INTO items (report_id, picture_image, details_description) 
-                                     VALUES (:rid, :pic, :desc)");
+                                       VALUES (:rid, :pic, :desc)");
             $stmtItem->execute([
                 'rid'  => $new_report_internal_id,
-                'pic'  => $image_name, // Saving photo in items table too as per schema
+                'pic'  => $image_name,
                 'desc' => $full_description
             ]);
 
@@ -99,54 +95,9 @@ switch ($method) {
             exit();
         }
         break;
-   case 'DELETE':
-        ob_clean();
-        $id = $_GET['id'] ?? null;
-        if (!$id) {
-            $content = file_get_contents("php://input");
-            $data = json_decode($content, true);
-            $id = $data['id'] ?? null;
-        }
-
-        if (!$id) {
-            http_response_code(400);
-            echo json_encode(["status" => "error", "message" => "Missing report ID for deletion"]);
-            exit();
-        }
-
-        try {
-            // 1. Fetch report to delete physical photo file if it exists
-            $stmtSelect = $pdo->prepare("SELECT photo_image FROM reports WHERE id = :id");
-            $stmtSelect->execute(['id' => $id]);
-            $report = $stmtSelect->fetch(PDO::FETCH_ASSOC);
-
-            if ($report) {
-                if (!empty($report['photo_image']) && file_exists('uploads/' . $report['photo_image'])) {
-                    unlink('uploads/' . $report['photo_image']);
-                }
-
-                // 2. Delete linked item row first
-                $stmtItem = $pdo->prepare("DELETE FROM items WHERE report_id = :id");
-                $stmtItem->execute(['id' => $id]);
-
-                // 3. Delete the report row
-                $stmtReport = $pdo->prepare("DELETE FROM reports WHERE id = :id");
-                $stmtReport->execute(['id' => $id]);
-
-                echo json_encode(["status" => "success", "message" => "Report deleted successfully"]);
-            } else {
-                http_response_code(404);
-                echo json_encode(["status" => "error", "message" => "Report not found"]);
-            }
-            exit();
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(["status" => "error", "message" => "Database Error: " . $e->getMessage()]);
-            exit();
-        }
-        break;
 
     case 'PATCH':
+        // Update an existing report's location or details
         ob_clean();
         $id = $_GET['id'] ?? null;
         $content = file_get_contents("php://input");
@@ -175,5 +126,11 @@ switch ($method) {
             echo json_encode(["status" => "error", "message" => "Database Error: " . $e->getMessage()]);
             exit();
         }
+        break;
+
+    default:
+        http_response_code(405);
+        echo json_encode(["status" => "error", "message" => "Method not allowed"]);
+        exit();
         break;
 }
