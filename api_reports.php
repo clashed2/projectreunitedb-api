@@ -5,17 +5,37 @@ require_once 'db.php';
 $method = $_SERVER['REQUEST_METHOD'];
 
 switch ($method) {
-    case 'GET':
-        // Joining reports, items, and users exactly as per your schema
-        $query = "SELECT r.*, i.details_description, u.name as filed_by_user 
-                  FROM reports r 
-                  LEFT JOIN items i ON r.id = i.report_id 
-                  LEFT JOIN users u ON r.user_id_who_filed = u.id 
-                  ORDER BY r.id DESC";
-        $stmt = $pdo->query($query);
-        $reports = $stmt->fetchAll();
+   case 'GET':
         ob_clean();
-        echo json_encode(["status" => "success", "data" => $reports]);
+        if (isset($_GET['id'])) {
+            // Fetch a single report if ?id= is in the URL
+            $query = "SELECT r.*, i.details_description, u.name as filed_by_user 
+                      FROM reports r 
+                      LEFT JOIN items i ON r.id = i.report_id 
+                      LEFT JOIN users u ON r.user_id_who_filed = u.id 
+                      WHERE r.id = :id";
+            $stmt = $pdo->prepare($query);
+            $stmt->execute(['id' => $_GET['id']]);
+            $report = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($report) {
+                echo json_encode(["status" => "success", "data" => $report]);
+            } else {
+                http_response_code(404);
+                echo json_encode(["status" => "error", "message" => "Report not found"]);
+            }
+        } else {
+            // Fetch all reports if no ID is provided
+            $query = "SELECT r.*, i.details_description, u.name as filed_by_user 
+                      FROM reports r 
+                      LEFT JOIN items i ON r.id = i.report_id 
+                      LEFT JOIN users u ON r.user_id_who_filed = u.id 
+                      ORDER BY r.id DESC";
+            $stmt = $pdo->query($query);
+            $reports = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(["status" => "success", "data" => $reports]);
+        }
+        exit();
         break;
 
     case 'POST':
