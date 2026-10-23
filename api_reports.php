@@ -1,136 +1,94 @@
 <?php
-ob_start();
-require_once 'db.php';
+require 'db.php';
+header('Content-Type: application/json');
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Methods: GET, POST, PATCH, DELETE");
 
 $method = $_SERVER['REQUEST_METHOD'];
+$input = json_decode(file_get_contents('php://input'), true);
 
-switch ($method) {
-    case 'GET':
-        ob_clean();
-        if (isset($_GET['id'])) {
-            // View a single report
-            $query = "SELECT r.*, i.details_description, u.name as filed_by_user 
-                      FROM reports r 
-                      LEFT JOIN items i ON r.id = i.report_id 
-                      LEFT JOIN users u ON r.user_id_who_filed = u.id 
-                      WHERE r.id = :id";
-            $stmt = $pdo->prepare($query);
-            $stmt->execute(['id' => $_GET['id']]);
-            $report = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($report) {
-                echo json_encode(["status" => "success", "data" => $report]);
-            } else {
-                http_response_code(404);
-                echo json_encode(["status" => "error", "message" => "Report not found"]);
-            }
+if ($method === 'GET') {
+    if (isset($_GET['id'])) {
+        // View Single Report with linked categories
+        $stmt = $pdo->prepare("
+            SELECT reports.*, GROUP_CONCAT(categories.name SEPARATOR ', ') AS category_names
+            FROM reports
+            LEFT JOIN category_report ON reports.id = category_report.report_id
+            LEFT JOIN categories ON category_report.category_id = categories.id
+            WHERE reports.id = ?
+            GROUP BY reports.id
+        ");
+        $stmt->execute([$_GET['id']]);
+        $report = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($report) {
+            echo json_encode(["status" => "success", "data" => $report]);
         } else {
-            // View all reports feed
-            $query = "SELECT r.*, i.details_description, u.name as filed_by_user 
-                      FROM reports r 
-                      LEFT JOIN items i ON r.id = i.report_id 
-                      LEFT JOIN users u ON r.user_id_who_filed = u.id 
-                      ORDER BY r.id DESC";
-            $stmt = $pdo->query($query);
-            $reports = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            echo json_encode(["status" => "success", "data" => $reports]);
+            echo json_encode(["status" => "error", "message" => "Report not found"]);
         }
-        exit();
-        break;
+    } else {
+        // View All Reports with linked categories
+        $stmt = $pdo->prepare("
+            SELECT reports.*, GROUP_CONCAT(categories.name SEPARATOR ', ') AS category_names
+            FROM reports
+            LEFT JOIN category_report ON reports.id = category_report.report_id
+            LEFT JOIN categories ON category_report.category_id = categories.id
+            GROUP BY reports.id
+        ");
+        $stmt->execute();
+        echo json_encode(["status" => "success", "data" => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+    }
+} 
+elseif ($method === 'POST') {
+    try {
+        $pdo->beginTransaction();
 
-    case 'POST':
-        // Create a new report
-        $content = file_get_contents("php://input");
-        $data = json_decode($content, true);
-        if (is_null($data)) { $data = $_POST; }
+        // 1. Create the Report
+        $stmt = $pdo->prepare("INSERT INTO reports (user_id_who_filed, location, item_name, description) VALUES (?, ?, ?, ?)");
+        $stmt->execute([
+            $input['user_id_who_filed'], 
+            $input['location'], 
+            $input['item_name'], 
+            $input['description']
+        ]);
+        $report_id = $pdo->lastInsertId();
 
-        if (empty($data['user_id_who_filed']) || empty($data['location'])) {
-            http_response_code(400);
-            echo json_encode(["status" => "error", "message" => "Missing required fields"]);
-            exit();
-        }
-
-        try {
-            $image_name = null;
-            if (!empty($data['encoded_image'])) {
-                $encoded_image = preg_replace('/^data:image\/\w+;base64,/', '', $data['encoded_image']);
-                $image_data = base64_decode($encoded_image);
-                $image_name = 'img_' . time() . '_' . uniqid() . '.jpg';
-                if (!file_exists('uploads')) { mkdir('uploads', 0777, true); }
-                file_put_contents('uploads/' . $image_name, $image_data);
+        // 2. Link Categories (from the JSON array "category_ids")
+        if (isset($input['category_ids']) && is_array($input['category_ids'])) {
+            $stmtCat = $pdo->prepare("INSERT INTO category_report (report_id, category_id) VALUES (?, ?)");
+            foreach ($input['category_ids'] as $cat_id) {
+                $stmtCat->execute([$report_id, $cat_id]);
             }
-
-            $sql = "INSERT INTO reports (report_id, user_id_who_filed, date_filed, photo_image, location) 
-                    VALUES (:report_id, :user_id, NOW(), :photo, :loc)";
-            $stmt = $pdo->prepare($sql);
-            
-            $readable_id = ($data['report_type'] ?? 'ITEM') . '-' . strtoupper(substr(uniqid(), -5));
-            
-            $stmt->execute([
-                'report_id' => $readable_id,
-                'user_id'   => $data['user_id_who_filed'],
-                'photo'     => $image_name,
-                'loc'       => $data['location']
-            ]);
-            
-            $new_report_internal_id = $pdo->lastInsertId();
-
-            $full_description = ($data['item_name'] ?? 'Unnamed') . " - " . ($data['description'] ?? '');
-            
-            $stmtItem = $pdo->prepare("INSERT INTO items (report_id, picture_image, details_description) 
-                                       VALUES (:rid, :pic, :desc)");
-            $stmtItem->execute([
-                'rid'  => $new_report_internal_id,
-                'pic'  => $image_name,
-                'desc' => $full_description
-            ]);
-
-            ob_clean();
-            echo json_encode(["status" => "success", "message" => "Report filed successfully"]);
-            exit();
-        } catch (PDOException $e) {
-            ob_clean();
-            http_response_code(500);
-            echo json_encode(["status" => "error", "message" => "Database Error: " . $e->getMessage()]);
-            exit();
-        }
-        break;
-
-    case 'PATCH':
-        // Update an existing report's location or details
-        ob_clean();
-        $id = $_GET['id'] ?? null;
-        $content = file_get_contents("php://input");
-        $data = json_decode($content, true);
-        if (!$id && isset($data['id'])) { $id = $data['id']; }
-
-        if (!$id) {
-            http_response_code(400);
-            echo json_encode(["status" => "error", "message" => "Missing report ID for update"]);
-            exit();
         }
 
-        try {
-            $location = $data['location'] ?? null;
-            if ($location) {
-                $stmt = $pdo->prepare("UPDATE reports SET location = :loc, updated_at = NOW() WHERE id = :id");
-                $stmt->execute(['loc' => $location, 'id' => $id]);
-                echo json_encode(["status" => "success", "message" => "Report updated successfully"]);
-            } else {
-                http_response_code(400);
-                echo json_encode(["status" => "error", "message" => "No update fields provided"]);
-            }
-            exit();
-        } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(["status" => "error", "message" => "Database Error: " . $e->getMessage()]);
-            exit();
-        }
-        break;
+        // 3. Create the Linked Item
+        $stmtItem = $pdo->prepare("INSERT INTO items (report_id, details_description) VALUES (?, ?)");
+        $stmtItem->execute([$report_id, $input['description']]);
 
-    default:
-        http_response_code(405);
-        echo json_encode(["status" => "error", "message" => "Method not allowed"]);
-        exit();
-        break;
+        $pdo->commit();
+        echo json_encode(["status" => "success", "message" => "Report created", "report_id" => $report_id]);
+
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        echo json_encode(["status" => "error", "message" => "Failed to create report: " . $e->getMessage()]);
+    }
+} 
+elseif ($method === 'PATCH') {
+    if (isset($_GET['id']) && isset($input['location'])) {
+        $stmt = $pdo->prepare("UPDATE reports SET location = ? WHERE id = ?");
+        $stmt->execute([$input['location'], $_GET['id']]);
+        echo json_encode(["status" => "success", "message" => "Report location updated"]);
+    } else {
+        echo json_encode(["status" => "error", "message" => "Missing ID or location data"]);
+    }
+} 
+elseif ($method === 'DELETE') {
+    if (isset($_GET['id'])) {
+        $stmt = $pdo->prepare("DELETE FROM reports WHERE id = ?");
+        $stmt->execute([$_GET['id']]);
+        echo json_encode(["status" => "success", "message" => "Report deleted"]);
+    } else {
+        echo json_encode(["status" => "error", "message" => "Missing report ID for deletion"]);
+    }
 }
+?>
