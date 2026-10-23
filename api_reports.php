@@ -17,16 +17,18 @@ try {
                 LEFT JOIN categories c ON cr.category_id = c.id";
 
         if (isset($_GET['id'])) {
-            $stmt = $pdo->prepare($sql . " WHERE r.id = ? GROUP BY r.id");
+            // Added i.details_description and i.picture_image to GROUP BY
+            $stmt = $pdo->prepare($sql . " WHERE r.id = ? GROUP BY r.id, i.details_description, i.picture_image");
             $stmt->execute([$_GET['id']]);
             $data = $stmt->fetch(PDO::FETCH_ASSOC);
         } else {
-            $stmt = $pdo->prepare($sql . " GROUP BY r.id ORDER BY r.created_at DESC");
+            // Added i.details_description and i.picture_image to GROUP BY
+            $stmt = $pdo->prepare($sql . " GROUP BY r.id, i.details_description, i.picture_image ORDER BY r.created_at DESC");
             $stmt->execute();
             $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
         }
         echo json_encode(["status" => "success", "data" => $data]);
-    } 
+    }
     elseif ($method === 'POST') {
         $pdo->beginTransaction();
 
