@@ -44,14 +44,13 @@ elseif ($method === 'POST') {
         $pdo->beginTransaction();
 
         // 1. Create the Report
-        $stmt = $pdo->prepare("INSERT INTO reports (user_id_who_filed, location, item_name, description) VALUES (?, ?, ?, ?)");
-        $stmt->execute([
-            $input['user_id_who_filed'], 
-            $input['location'], 
-            $input['item_name'], 
-            $input['description']
-        ]);
-        $report_id = $pdo->lastInsertId();
+        $stmt = $pdo->prepare("INSERT INTO reports (user_id_who_filed, location, description) VALUES (?, ?, ?)");
+$stmt->execute([
+    $input['user_id_who_filed'], 
+    $input['location'], 
+    $input['description']
+]);
+$report_id = $pdo->lastInsertId();
 
         // 2. Link Categories (from the JSON array "category_ids")
         if (isset($input['category_ids']) && is_array($input['category_ids'])) {
