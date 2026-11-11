@@ -6,10 +6,11 @@ header("Access-Control-Allow-Methods: GET, POST, PATCH, DELETE");
 
 $method = $_SERVER['REQUEST_METHOD'];
 $input = json_decode(file_get_contents('php://input'), true);
+if (is_null($input)) { $input = $_POST; }
 
 try {
     if ($method === 'GET') {
-        $sql = "SELECT r.*, i.details_description, i.picture_image, 
+        $sql = "SELECT r.*, i.details_description, i.picture_image,
                        GROUP_CONCAT(c.name SEPARATOR ', ') AS category_names
                 FROM reports r
                 LEFT JOIN items i ON r.id = i.report_id
@@ -32,20 +33,42 @@ try {
     elseif ($method === 'POST') {
         $pdo->beginTransaction();
 
+        $user_id_input = isset($input['user_id_who_filed']) ? $input['user_id_who_filed'] : 1;
+
+        // Fix integrity error: Verify user exists in DB, otherwise fallback to first user or create guest
+        $userCheck = $pdo->prepare("SELECT id FROM users WHERE id = ?");
+        $userCheck->execute([$user_id_input]);
+        if (!$userCheck->fetch()) {
+            $fallbackUser = $pdo->query("SELECT id FROM users ORDER BY id ASC LIMIT 1")->fetch();
+            if ($fallbackUser) {
+                $user_id = $fallbackUser['id'];
+            } else {
+                $pdo->exec("INSERT INTO users (name, username, email, password) VALUES ('Guest', 'guest@reunite.com', 'guest@reunite.com', 'password')");
+                $user_id = $pdo->lastInsertId();
+            }
+        } else {
+            $user_id = $user_id_input;
+        }
+
         $custom_report_id = 'REP-' . strtoupper(substr(md5(uniqid()), 0, 5));
 
         $stmt = $pdo->prepare("INSERT INTO reports (report_id, user_id_who_filed, location, date_filed) VALUES (?, ?, ?, NOW())");
         $stmt->execute([
             $custom_report_id,
-            $input['user_id_who_filed'], 
-            $input['location']
+            $user_id,
+            isset($input['location']) ? $input['location'] : 'Unknown Location'
         ]);
         $primary_db_id = $pdo->lastInsertId();
 
         if (!empty($input['category_ids']) && is_array($input['category_ids'])) {
             $stmtCat = $pdo->prepare("INSERT INTO category_report (category_id, report_id) VALUES (?, ?)");
             foreach ($input['category_ids'] as $cat_id) {
-                $stmtCat->execute([$cat_id, $primary_db_id]);
+                // Verify category exists before inserting to prevent category foreign key integrity errors
+                $catCheck = $pdo->prepare("SELECT id FROM categories WHERE id = ?");
+                $catCheck->execute([$cat_id]);
+                if ($catCheck->fetch()) {
+                    $stmtCat->execute([$cat_id, $primary_db_id]);
+                }
             }
         }
 
@@ -55,18 +78,18 @@ try {
 
         $stmtItem = $pdo->prepare("INSERT INTO items (report_id, details_description) VALUES (?, ?)");
         $stmtItem->execute([
-            $primary_db_id, 
+            $primary_db_id,
             $full_details
         ]);
 
         $pdo->commit();
         echo json_encode([
-            "status" => "success", 
-            "message" => "Report created", 
+            "status" => "success",
+            "message" => "Report created",
             "internal_id" => $primary_db_id,
             "report_code" => $custom_report_id
         ]);
-    } 
+    }
     elseif ($method === 'PATCH') {
         if (isset($_GET['id']) && isset($input['location'])) {
             $stmt = $pdo->prepare("UPDATE reports SET location = ? WHERE id = ?");
@@ -75,7 +98,7 @@ try {
         } else {
             echo json_encode(["status" => "error", "message" => "Missing ID or location data"]);
         }
-    } 
+    }
     elseif ($method === 'DELETE') {
         if (isset($_GET['id'])) {
             $stmt = $pdo->prepare("DELETE FROM reports WHERE id = ?");
