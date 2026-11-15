@@ -75,12 +75,10 @@ try {
         $item_name = isset($input['item_name']) ? $input['item_name'] : 'Unknown Item';
         $description = isset($input['description']) ? $input['description'] : 'No description';
         $full_details = $item_name . " - " . $description;
+        $picture_image = isset($input['encoded_image']) ? $input['encoded_image'] : (isset($input['picture_image']) ? $input['picture_image'] : null);
 
-        $stmtItem = $pdo->prepare("INSERT INTO items (report_id, details_description) VALUES (?, ?)");
-        $stmtItem->execute([
-            $primary_db_id,
-            $full_details
-        ]);
+        $stmtItem = $pdo->prepare("INSERT INTO items (report_id, details_description, picture_image) VALUES (?, ?, ?)");
+        $stmtItem->execute([$primary_db_id, $full_details, $picture_image]);
 
         $pdo->commit();
         echo json_encode([
