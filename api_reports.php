@@ -48,6 +48,7 @@ try {
             $user_id = $user_id_input;
         }
 
+        // Short 9-character unique report code (e.g. REP-A1B2C)
         $custom_report_id = 'REP-' . strtoupper(substr(md5(uniqid()), 0, 5));
 
         // Extract photo from payload
@@ -63,7 +64,9 @@ try {
         $photo_image = null;
         if ($raw_image) {
             $clean_data = trim($raw_image);
-            if (strpos($clean_data, 'http://') === 0 || strpos($clean_data, 'https://') === 0 || (strlen($clean_data) <= 255 && strpos($clean_data, '.') !== false)) {
+            if (strpos($clean_data, 'http://') === 0 || strpos($clean_data, 'https://') === 0) {
+                $photo_image = substr($clean_data, 0, 40);
+            } elseif (strlen($clean_data) <= 40 && strpos($clean_data, '.') !== false) {
                 $photo_image = $clean_data;
             } else {
                 // Base64 Image: Decode and save to uploads/ directory as JPEG file
@@ -72,20 +75,20 @@ try {
                 }
                 $img_bytes = base64_decode($clean_data);
                 if ($img_bytes !== false && strlen($img_bytes) > 0) {
-                    $filename = 'img_' . time() . '_' . substr(md5(uniqid()), 0, 10) . '.jpg';
+                    $filename = 'img_' . time() . '_' . substr(md5(uniqid()), 0, 5) . '.jpg';
                     $upload_dir = __DIR__ . '/uploads/';
                     if (!file_exists($upload_dir)) {
                         @mkdir($upload_dir, 0777, true);
                     }
                     @file_put_contents($upload_dir . $filename, $img_bytes);
-                    $photo_image = $filename;
+                    $photo_image = $filename; // Short 22-character filename
                 }
             }
         }
 
-        // Safety truncation for photo_image filename (max 250 chars)
-        if ($photo_image !== null && strlen($photo_image) > 250) {
-            $photo_image = substr($photo_image, 0, 250);
+        // Enforce maximum 40 characters for photo_image filename
+        if ($photo_image !== null && strlen($photo_image) > 40) {
+            $photo_image = substr($photo_image, 0, 40);
         }
 
         // Format date_filed safely for MySQL DATETIME (YYYY-MM-DD HH:MM:SS)
@@ -97,8 +100,8 @@ try {
             }
         }
 
-        // Clean location (max 200 chars)
-        $location_val = isset($input['location']) ? substr($input['location'], 0, 200) : 'Unknown Location';
+        // Enforce maximum 40 characters for location
+        $location_val = isset($input['location']) ? substr($input['location'], 0, 40) : 'Unknown Location';
 
         $stmt = $pdo->prepare("INSERT INTO reports (report_id, user_id_who_filed, location, photo_image, date_filed) VALUES (?, ?, ?, ?, ?)");
         $stmt->execute([
@@ -123,7 +126,7 @@ try {
 
         $item_name = isset($input['item_name']) ? $input['item_name'] : 'Unknown Item';
         $description = isset($input['description']) ? $input['description'] : 'No description';
-        $full_details = $item_name . " - " . $description;
+        $full_details = substr($item_name . " - " . $description, 0, 90);
 
         $stmtItem = $pdo->prepare("INSERT INTO items (report_id, details_description, picture_image) VALUES (?, ?, ?)");
         $stmtItem->execute([
@@ -143,7 +146,7 @@ try {
     elseif ($method === 'PATCH') {
         if (isset($_GET['id']) && isset($input['location'])) {
             $stmt = $pdo->prepare("UPDATE reports SET location = ? WHERE id = ?");
-            $stmt->execute([$input['location'], $_GET['id']]);
+            $stmt->execute([substr($input['location'], 0, 40), $_GET['id']]);
             echo json_encode(["status" => "success", "message" => "Report location updated"]);
         } else {
             echo json_encode(["status" => "error", "message" => "Missing ID or location data"]);
@@ -162,6 +165,6 @@ try {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
-    echo json_encode(["status" => "error", "message" => "System Error: " . $e->getMessage()]);
+    echo json_encode(["status" => "error", "message" => "SQL Error: " . $e->getMessage()]);
 }
 ?>
