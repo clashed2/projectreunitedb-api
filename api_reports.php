@@ -1,5 +1,24 @@
 <?php
 require 'db.php';
+
+// Serve uploaded image directly via PHP endpoint
+if (isset($_GET['image'])) {
+    $img_name = basename($_GET['image']);
+    $file_path = __DIR__ . '/uploads/' . $img_name;
+    if (file_exists($file_path)) {
+        header('Content-Type: image/jpeg');
+        header('Content-Length: ' . filesize($file_path));
+        header("Access-Control-Allow-Origin: *");
+        readfile($file_path);
+        exit();
+    } else {
+        header('Content-Type: application/json');
+        http_response_code(404);
+        echo json_encode(["status" => "error", "message" => "Image not found"]);
+        exit();
+    }
+}
+
 header('Content-Type: application/json');
 header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: GET, POST, PATCH, DELETE");
@@ -104,7 +123,7 @@ try {
         $location_val = isset($input['location']) ? substr($input['location'], 0, 40) : 'Unknown Location';
 
         $stmt = $pdo->prepare("INSERT INTO reports (report_id, user_id_who_filed, location, photo_image, date_filed) VALUES (?, ?, ?, ?, ?)");
-        $stmt->execute([
+        $stmt.execute([
             $custom_report_id,
             $user_id,
             $location_val,
