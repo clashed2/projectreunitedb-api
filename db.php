@@ -10,8 +10,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 $host     = getenv('DB_HOST') ?: 'mysql-16c4af19-projectreunitedb.e.aivencloud.com';
-$port     = getenv('DB_PORT') ?: 'defaultdb';  // <-- Added port variable
-$dbname   = getenv('DB_NAME') ?: 'projectreunitedb';
+$port     = getenv('DB_PORT') ?: '15838';  // <-- Added port variable
+$dbname   = getenv('DB_NAME') ?: 'defaultdb';
 $username = getenv('DB_USER') ?: 'avnadmin';
 $password = getenv('DB_PASS') ?: '';
 
