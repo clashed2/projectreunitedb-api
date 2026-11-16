@@ -84,8 +84,8 @@ try {
         if ($raw_image) {
             $clean_data = trim($raw_image);
             if (strpos($clean_data, 'http://') === 0 || strpos($clean_data, 'https://') === 0) {
-                $photo_image = substr($clean_data, 0, 40);
-            } elseif (strlen($clean_data) <= 40 && strpos($clean_data, '.') !== false) {
+                $photo_image = substr($clean_data, 0, 100);
+            } elseif (strlen($clean_data) <= 100 && strpos($clean_data, '.') !== false) {
                 $photo_image = $clean_data;
             } else {
                 // Base64 Image: Decode and save to uploads/ directory as JPEG file
@@ -99,15 +99,11 @@ try {
                     if (!file_exists($upload_dir)) {
                         @mkdir($upload_dir, 0777, true);
                     }
-                    @file_put_contents($upload_dir . $filename, $img_bytes);
-                    $photo_image = $filename; // Short 22-character filename
+                    if (@file_put_contents($upload_dir . $filename, $img_bytes) !== false) {
+                        $photo_image = $filename; // Short 22-character filename
+                    }
                 }
             }
-        }
-
-        // Enforce maximum 40 characters for photo_image filename
-        if ($photo_image !== null && strlen($photo_image) > 40) {
-            $photo_image = substr($photo_image, 0, 40);
         }
 
         // Format date_filed safely for MySQL DATETIME (YYYY-MM-DD HH:MM:SS)
@@ -119,8 +115,8 @@ try {
             }
         }
 
-        // Enforce maximum 40 characters for location
-        $location_val = isset($input['location']) ? substr($input['location'], 0, 40) : 'Unknown Location';
+        // Clean location (max 200 chars)
+        $location_val = isset($input['location']) ? substr($input['location'], 0, 200) : 'Unknown Location';
 
         $stmt = $pdo->prepare("INSERT INTO reports (report_id, user_id_who_filed, location, photo_image, date_filed) VALUES (?, ?, ?, ?, ?)");
         $stmt->execute([
@@ -145,7 +141,7 @@ try {
 
         $item_name = isset($input['item_name']) ? $input['item_name'] : 'Unknown Item';
         $description = isset($input['description']) ? $input['description'] : 'No description';
-        $full_details = substr($item_name . " - " . $description, 0, 90);
+        $full_details = $item_name . " - " . $description;
 
         $stmtItem = $pdo->prepare("INSERT INTO items (report_id, details_description, picture_image) VALUES (?, ?, ?)");
         $stmtItem->execute([
@@ -165,7 +161,7 @@ try {
     elseif ($method === 'PATCH') {
         if (isset($_GET['id']) && isset($input['location'])) {
             $stmt = $pdo->prepare("UPDATE reports SET location = ? WHERE id = ?");
-            $stmt->execute([substr($input['location'], 0, 40), $_GET['id']]);
+            $stmt->execute([substr($input['location'], 0, 200), $_GET['id']]);
             echo json_encode(["status" => "success", "message" => "Report location updated"]);
         } else {
             echo json_encode(["status" => "error", "message" => "Missing ID or location data"]);
