@@ -159,12 +159,18 @@ try {
         ]);
     }
     elseif ($method === 'PATCH') {
-        if (isset($_GET['id']) && isset($input['location'])) {
-            $stmt = $pdo->prepare("UPDATE reports SET location = ? WHERE id = ?");
-            $stmt->execute([substr($input['location'], 0, 200), $_GET['id']]);
-            echo json_encode(["status" => "success", "message" => "Report location updated"]);
+        if (isset($_GET['id'])) {
+            if (isset($input['location'])) {
+                $stmt = $pdo->prepare("UPDATE reports SET location = ? WHERE id = ?");
+                $stmt->execute([substr($input['location'], 0, 200), $_GET['id']]);
+            }
+            if (!empty($input['status']) || !empty($input['report_type'])) {
+                $stmt = $pdo->prepare("UPDATE reports SET date_claimed = NOW() WHERE id = ?");
+                $stmt->execute([$_GET['id']]);
+            }
+            echo json_encode(["status" => "success", "message" => "Report updated"]);
         } else {
-            echo json_encode(["status" => "error", "message" => "Missing ID or location data"]);
+            echo json_encode(["status" => "error", "message" => "Missing ID data"]);
         }
     }
     elseif ($method === 'DELETE') {
