@@ -50,17 +50,42 @@ try {
 
         $custom_report_id = 'REP-' . strtoupper(substr(md5(uniqid()), 0, 5));
 
-        // Extract photo_image from payload
-        $photo_image = null;
+        // Extract photo from payload
+        $raw_image = null;
         if (!empty($input['photo_image'])) {
-            $photo_image = $input['photo_image'];
+            $raw_image = $input['photo_image'];
         } elseif (!empty($input['encoded_image'])) {
-            $photo_image = $input['encoded_image'];
+            $raw_image = $input['encoded_image'];
         } elseif (!empty($input['picture_image'])) {
-            $photo_image = $input['picture_image'];
+            $raw_image = $input['picture_image'];
         }
 
-        // Insert into reports table with photo_image included
+        $photo_image = null;
+        if ($raw_image) {
+            $clean_data = trim($raw_image);
+            if (strpos($clean_data, 'http://') === 0 || strpos($clean_data, 'https://') === 0 || (strlen($clean_data) < 255 && strpos($clean_data, '.') !== false)) {
+                $photo_image = $clean_data;
+            } else {
+                // Base64 Image: Decode and save to uploads/ directory as JPEG file
+                if (strpos($clean_data, 'base64,') !== false) {
+                    $clean_data = explode('base64,', $clean_data)[1];
+                }
+                $img_bytes = base64_decode($clean_data);
+                if ($img_bytes !== false && strlen($img_bytes) > 0) {
+                    $filename = 'img_' . time() . '_' . substr(md5(uniqid()), 0, 10) . '.jpg';
+                    $upload_dir = __DIR__ . '/uploads/';
+                    if (!file_exists($upload_dir)) {
+                        @mkdir($upload_dir, 0777, true);
+                    }
+                    if (@file_put_contents($upload_dir . $filename, $img_bytes) !== false) {
+                        $photo_image = $filename;
+                    } else {
+                        $photo_image = substr($clean_data, 0, 250);
+                    }
+                }
+            }
+        }
+
         $stmt = $pdo->prepare("INSERT INTO reports (report_id, user_id_who_filed, location, photo_image, date_filed) VALUES (?, ?, ?, ?, NOW())");
         $stmt->execute([
             $custom_report_id,
@@ -85,7 +110,6 @@ try {
         $description = isset($input['description']) ? $input['description'] : 'No description';
         $full_details = $item_name . " - " . $description;
 
-        // Insert into items table
         $stmtItem = $pdo->prepare("INSERT INTO items (report_id, details_description, picture_image) VALUES (?, ?, ?)");
         $stmtItem->execute([
             $primary_db_id,
