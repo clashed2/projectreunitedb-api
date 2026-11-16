@@ -50,7 +50,7 @@ try {
 
         $custom_report_id = 'REP-' . strtoupper(substr(md5(uniqid()), 0, 5));
 
-        // Extract photo_image from input payload
+        // Extract photo_image from payload
         $photo_image = null;
         if (!empty($input['photo_image'])) {
             $photo_image = $input['photo_image'];
