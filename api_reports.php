@@ -83,17 +83,30 @@ try {
             }
         }
 
-        // Hard safety check so string length NEVER exceeds VARCHAR(255) limit in MySQL
+        // Safety truncation for photo_image filename (max 250 chars)
         if ($photo_image !== null && strlen($photo_image) > 250) {
             $photo_image = substr($photo_image, 0, 250);
         }
 
-        $stmt = $pdo->prepare("INSERT INTO reports (report_id, user_id_who_filed, location, photo_image, date_filed) VALUES (?, ?, ?, ?, NOW())");
+        // Format date_filed safely for MySQL DATETIME (YYYY-MM-DD HH:MM:SS)
+        $date_filed = date('Y-m-d H:i:s');
+        if (!empty($input['date_filed'])) {
+            $parsed = strtotime($input['date_filed']);
+            if ($parsed !== false) {
+                $date_filed = date('Y-m-d H:i:s', $parsed);
+            }
+        }
+
+        // Clean location (max 200 chars)
+        $location_val = isset($input['location']) ? substr($input['location'], 0, 200) : 'Unknown Location';
+
+        $stmt = $pdo->prepare("INSERT INTO reports (report_id, user_id_who_filed, location, photo_image, date_filed) VALUES (?, ?, ?, ?, ?)");
         $stmt->execute([
             $custom_report_id,
             $user_id,
-            isset($input['location']) ? $input['location'] : 'Unknown Location',
-            $photo_image
+            $location_val,
+            $photo_image,
+            $date_filed
         ]);
         $primary_db_id = $pdo->lastInsertId();
 
