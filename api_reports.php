@@ -18,12 +18,10 @@ try {
                 LEFT JOIN categories c ON cr.category_id = c.id";
 
         if (isset($_GET['id'])) {
-            // Added i.details_description and i.picture_image to GROUP BY
             $stmt = $pdo->prepare($sql . " WHERE r.id = ? GROUP BY r.id, i.details_description, i.picture_image");
             $stmt->execute([$_GET['id']]);
             $data = $stmt->fetch(PDO::FETCH_ASSOC);
         } else {
-            // Added i.details_description and i.picture_image to GROUP BY
             $stmt = $pdo->prepare($sql . " GROUP BY r.id, i.details_description, i.picture_image ORDER BY r.created_at DESC");
             $stmt->execute();
             $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -35,7 +33,7 @@ try {
 
         $user_id_input = isset($input['user_id_who_filed']) ? $input['user_id_who_filed'] : 1;
 
-        // Fix integrity error: Verify user exists in DB, otherwise fallback to first user or create guest
+        // Verify user exists in DB, otherwise fallback to first user or create guest
         $userCheck = $pdo->prepare("SELECT id FROM users WHERE id = ?");
         $userCheck->execute([$user_id_input]);
         if (!$userCheck->fetch()) {
@@ -52,18 +50,29 @@ try {
 
         $custom_report_id = 'REP-' . strtoupper(substr(md5(uniqid()), 0, 5));
 
-        $stmt = $pdo->prepare("INSERT INTO reports (report_id, user_id_who_filed, location, date_filed) VALUES (?, ?, ?, NOW())");
+        // Extract photo_image from input payload
+        $photo_image = null;
+        if (!empty($input['photo_image'])) {
+            $photo_image = $input['photo_image'];
+        } elseif (!empty($input['encoded_image'])) {
+            $photo_image = $input['encoded_image'];
+        } elseif (!empty($input['picture_image'])) {
+            $photo_image = $input['picture_image'];
+        }
+
+        // Insert into reports table with photo_image included
+        $stmt = $pdo->prepare("INSERT INTO reports (report_id, user_id_who_filed, location, photo_image, date_filed) VALUES (?, ?, ?, ?, NOW())");
         $stmt->execute([
             $custom_report_id,
             $user_id,
-            isset($input['location']) ? $input['location'] : 'Unknown Location'
+            isset($input['location']) ? $input['location'] : 'Unknown Location',
+            $photo_image
         ]);
         $primary_db_id = $pdo->lastInsertId();
 
         if (!empty($input['category_ids']) && is_array($input['category_ids'])) {
             $stmtCat = $pdo->prepare("INSERT INTO category_report (category_id, report_id) VALUES (?, ?)");
             foreach ($input['category_ids'] as $cat_id) {
-                // Verify category exists before inserting to prevent category foreign key integrity errors
                 $catCheck = $pdo->prepare("SELECT id FROM categories WHERE id = ?");
                 $catCheck->execute([$cat_id]);
                 if ($catCheck->fetch()) {
@@ -75,10 +84,14 @@ try {
         $item_name = isset($input['item_name']) ? $input['item_name'] : 'Unknown Item';
         $description = isset($input['description']) ? $input['description'] : 'No description';
         $full_details = $item_name . " - " . $description;
-        $picture_image = isset($input['encoded_image']) ? $input['encoded_image'] : (isset($input['picture_image']) ? $input['picture_image'] : null);
 
+        // Insert into items table
         $stmtItem = $pdo->prepare("INSERT INTO items (report_id, details_description, picture_image) VALUES (?, ?, ?)");
-        $stmtItem->execute([$primary_db_id, $full_details, $picture_image]);
+        $stmtItem->execute([
+            $primary_db_id,
+            $full_details,
+            $photo_image
+        ]);
 
         $pdo->commit();
         echo json_encode([
