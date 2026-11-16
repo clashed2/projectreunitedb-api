@@ -123,7 +123,7 @@ try {
         $location_val = isset($input['location']) ? substr($input['location'], 0, 40) : 'Unknown Location';
 
         $stmt = $pdo->prepare("INSERT INTO reports (report_id, user_id_who_filed, location, photo_image, date_filed) VALUES (?, ?, ?, ?, ?)");
-        $stmt.execute([
+        $stmt->execute([
             $custom_report_id,
             $user_id,
             $location_val,
