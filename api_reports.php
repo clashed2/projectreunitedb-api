@@ -1,10 +1,10 @@
 <?php
 require 'db.php';
 
-// Serve uploaded image directly via PHP endpoint
+// Backward compatibility: serve legacy files from /uploads/ if they still exist
 if (isset($_GET['image'])) {
     $img_name = basename($_GET['image']);
-    $file_path = __DIR__ . '/uploads/' . $img_name;
+    $file_path = __DIR__ . '/uploads/' .$img_name;
     if (file_exists($file_path)) {
         header('Content-Type: image/jpeg');
         header('Content-Length: ' . filesize($file_path));
@@ -21,133 +21,134 @@ if (isset($_GET['image'])) {
 
 header('Content-Type: application/json');
 header("Access-Control-Allow-Origin: *");
-header("Access-Control-Allow-Methods: GET, POST, PATCH, DELETE");
+header("Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS");
 
-$method = $_SERVER['REQUEST_METHOD'];
-$input = json_decode(file_get_contents('php://input'), true);
-if (is_null($input)) { $input = $_POST; }
+/**
+ * Safely ensures required columns exist so images and Lost/Found claim states persist across restarts.
+ */
+function ensureSchema(PDO $pdo) {
+    try {
+        $cols =$pdo->query("SHOW COLUMNS FROM reports")->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('report_type', $cols)) {$pdo->exec("ALTER TABLE reports ADD COLUMN report_type VARCHAR(20) NOT NULL DEFAULT 'LOST'");
+        }
+        if (!in_array('claim_status', $cols)) {$pdo->exec("ALTER TABLE reports ADD COLUMN claim_status VARCHAR(20) NOT NULL DEFAULT 'OPEN'");
+        }
+        if (!in_array('claimant_id', $cols)) {$pdo->exec("ALTER TABLE reports ADD COLUMN claimant_id INT NULL");
+        }
+        if (!in_array('claimant_name', $cols)) {$pdo->exec("ALTER TABLE reports ADD COLUMN claimant_name VARCHAR(120) NULL");
+        }
+        if (!in_array('claimant_contact', $cols)) {$pdo->exec("ALTER TABLE reports ADD COLUMN claimant_contact VARCHAR(120) NULL");
+        }
+        if (!in_array('claim_note', $cols)) {$pdo->exec("ALTER TABLE reports ADD COLUMN claim_note TEXT NULL");
+        }
+        $pdo->exec("ALTER TABLE reports MODIFY COLUMN photo_image LONGTEXT NULL");
+        $pdo->exec("ALTER TABLE items MODIFY COLUMN picture_image LONGTEXT NULL");
+    } catch (Exception $ignored) {
+        // Ignore if already migrated or restricted
+    }
+}
+
+ensureSchema($pdo);
+
+$method = $_SERVER['REQUEST_METHOD'];$input = json_decode(file_get_contents('php://input'), true);
+if (is_null($input)) { $input =$_POST; }
 
 try {
-    if ($method === 'GET') {
-        $sql = "SELECT r.*, i.details_description, i.picture_image,
-                       GROUP_CONCAT(c.name SEPARATOR ', ') AS category_names
+    if ($method === 'GET') {$sql = "SELECT r.*,
+                       u.name AS filed_by_user,
+                       u.email AS filer_email,
+                       u.phone_number AS filer_phone,
+                       i.details_description,
+                       i.picture_image,
+                       GROUP_CONCAT(DISTINCT c.name SEPARATOR ', ') AS category_name
                 FROM reports r
+                LEFT JOIN users u ON r.user_id_who_filed = u.id
                 LEFT JOIN items i ON r.id = i.report_id
                 LEFT JOIN category_report cr ON r.id = cr.report_id
                 LEFT JOIN categories c ON cr.category_id = c.id";
 
-        if (isset($_GET['id'])) {
-            $stmt = $pdo->prepare($sql . " WHERE r.id = ? GROUP BY r.id, i.details_description, i.picture_image");
+        if (isset($_GET['id'])) {$stmt = $pdo->prepare($sql . " WHERE r.id = ? GROUP BY r.id");
             $stmt->execute([$_GET['id']]);
-            $data = $stmt->fetch(PDO::FETCH_ASSOC);
+            $data =$stmt->fetch(PDO::FETCH_ASSOC);
         } else {
-            $stmt = $pdo->prepare($sql . " GROUP BY r.id, i.details_description, i.picture_image ORDER BY r.created_at DESC");
+            $stmt = $pdo->prepare($sql . " GROUP BY r.id ORDER BY r.id DESC");
             $stmt->execute();
-            $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $data =$stmt->fetchAll(PDO::FETCH_ASSOC);
         }
         echo json_encode(["status" => "success", "data" => $data]);
     }
-    elseif ($method === 'POST') {
-        $pdo->beginTransaction();
+    elseif ($method === 'POST') {$pdo->beginTransaction();
 
-        $user_id_input = isset($input['user_id_who_filed']) ? $input['user_id_who_filed'] : 1;
+        $user_id_input = isset($input['user_id_who_filed']) ? (int)$input['user_id_who_filed'] : 1;
 
-        // Verify user exists in DB, otherwise fallback to first user or create guest
-        $userCheck = $pdo->prepare("SELECT id FROM users WHERE id = ?");
+        $userCheck =$pdo->prepare("SELECT id FROM users WHERE id = ?");
         $userCheck->execute([$user_id_input]);
         if (!$userCheck->fetch()) {
-            $fallbackUser = $pdo->query("SELECT id FROM users ORDER BY id ASC LIMIT 1")->fetch();
+            $fallbackUser =$pdo->query("SELECT id FROM users ORDER BY id ASC LIMIT 1")->fetch();
             if ($fallbackUser) {
-                $user_id = $fallbackUser['id'];
+                $user_id =$fallbackUser['id'];
             } else {
                 $pdo->exec("INSERT INTO users (name, username, email, password) VALUES ('Guest', 'guest@reunite.com', 'guest@reunite.com', 'password')");
-                $user_id = $pdo->lastInsertId();
+                $user_id =$pdo->lastInsertId();
             }
         } else {
-            $user_id = $user_id_input;
+            $user_id =$user_id_input;
         }
 
-        // Short 9-character unique report code (e.g. REP-A1B2C)
         $custom_report_id = 'REP-' . strtoupper(substr(md5(uniqid()), 0, 5));
 
-        // Extract photo from payload
-        $raw_image = null;
-        if (!empty($input['photo_image'])) {
-            $raw_image = $input['photo_image'];
-        } elseif (!empty($input['encoded_image'])) {
-            $raw_image = $input['encoded_image'];
-        } elseif (!empty($input['picture_image'])) {
-            $raw_image = $input['picture_image'];
+        $report_type = strtoupper(trim($input['report_type'] ?? 'LOST'));
+        if ($report_type !== 'FOUND') {$report_type = 'LOST';
         }
 
+        // Store image as persistent Data URI in MySQL so it survives container restarts
+        $raw_image =$input['photo_image'] ?? ($input['encoded_image'] ?? ($input['picture_image'] ?? null));
         $photo_image = null;
-        if ($raw_image) {
+        if (!empty($raw_image)) {
             $clean_data = trim($raw_image);
-            if (strpos($clean_data, 'http://') === 0 || strpos($clean_data, 'https://') === 0) {
-                $photo_image = substr($clean_data, 0, 100);
-            } elseif (strlen($clean_data) <= 100 && strpos($clean_data, '.') !== false) {
-                $photo_image = $clean_data;
+            if (strpos($clean_data, 'http://') === 0 || strpos($clean_data, 'https://') === 0 \vert{}\vert{} strpos($clean_data, 'data:image') === 0) {
+                $photo_image =$clean_data;
             } else {
-                // Base64 Image: Decode and save to uploads/ directory as JPEG file
                 if (strpos($clean_data, 'base64,') !== false) {
-                    $clean_data = explode('base64,', $clean_data)[1];
+                    $clean_data = explode('base64,',$clean_data)[1];
                 }
-                $img_bytes = base64_decode($clean_data);
-                if ($img_bytes !== false && strlen($img_bytes) > 0) {
-                    $filename = 'img_' . time() . '_' . substr(md5(uniqid()), 0, 5) . '.jpg';
-                    $upload_dir = __DIR__ . '/uploads/';
-                    if (!file_exists($upload_dir)) {
-                        @mkdir($upload_dir, 0777, true);
-                    }
-                    if (@file_put_contents($upload_dir . $filename, $img_bytes) !== false) {
-                        $photo_image = $filename; // Short 22-character filename
-                    }
-                }
+                $photo_image = 'data:image/jpeg;base64,' .$clean_data;
             }
         }
 
-        // Format date_filed safely for MySQL DATETIME (YYYY-MM-DD HH:MM:SS)
         $date_filed = date('Y-m-d H:i:s');
-        if (!empty($input['date_filed'])) {
-            $parsed = strtotime($input['date_filed']);
+        if (!empty($input['date_filed'])) {$cleanDate = preg_replace('/^(Today|Yesterday)\s*\((.*?)\)/i', '$2', $input['date_filed']);$cleanDate = preg_replace('/Current Time\s*\((.*?)\)/i', '$1',$cleanDate);
+            $parsed = strtotime($cleanDate);
             if ($parsed !== false) {
-                $date_filed = date('Y-m-d H:i:s', $parsed);
+                $date_filed = date('Y-m-d H:i:s',$parsed);
             }
         }
 
-        // Clean location (max 200 chars)
-        $location_val = isset($input['location']) ? substr($input['location'], 0, 200) : 'Unknown Location';
+        $location_val = isset($input['location']) ? substr(trim($input['location']), 0, 200) : 'Unknown Location';
 
-        $stmt = $pdo->prepare("INSERT INTO reports (report_id, user_id_who_filed, location, photo_image, date_filed) VALUES (?, ?, ?, ?, ?)");
+        $stmt =$pdo->prepare("INSERT INTO reports (report_id, user_id_who_filed, location, photo_image, date_filed, report_type, claim_status) VALUES (?, ?, ?, ?, ?, ?, 'OPEN')");
         $stmt->execute([
-            $custom_report_id,
-            $user_id,
-            $location_val,
-            $photo_image,
-            $date_filed
+            $custom_report_id,$user_id,
+            $location_val,$photo_image,
+            $date_filed,$report_type
         ]);
-        $primary_db_id = $pdo->lastInsertId();
+        $primary_db_id =$pdo->lastInsertId();
 
         if (!empty($input['category_ids']) && is_array($input['category_ids'])) {
-            $stmtCat = $pdo->prepare("INSERT INTO category_report (category_id, report_id) VALUES (?, ?)");
-            foreach ($input['category_ids'] as $cat_id) {
-                $catCheck = $pdo->prepare("SELECT id FROM categories WHERE id = ?");
+            $stmtCat =$pdo->prepare("INSERT INTO category_report (category_id, report_id) VALUES (?, ?)");
+            foreach ($input['category_ids'] as$cat_id) {
+                $catCheck =$pdo->prepare("SELECT id FROM categories WHERE id = ?");
                 $catCheck->execute([$cat_id]);
-                if ($catCheck->fetch()) {
-                    $stmtCat->execute([$cat_id, $primary_db_id]);
+                if ($catCheck->fetch()) {$stmtCat->execute([$cat_id,$primary_db_id]);
                 }
             }
         }
 
-        $item_name = isset($input['item_name']) ? $input['item_name'] : 'Unknown Item';
-        $description = isset($input['description']) ? $input['description'] : 'No description';
-        $full_details = $item_name . " - " . $description;
+        $item_name = trim($input['item_name'] ?? 'Unknown Item');$description = trim($input['description'] ?? 'No description provided');$full_details = $item_name . " - " . $description;
 
-        $stmtItem = $pdo->prepare("INSERT INTO items (report_id, details_description, picture_image) VALUES (?, ?, ?)");
-        $stmtItem->execute([
-            $primary_db_id,
-            $full_details,
-            $photo_image
+        $stmtItem =$pdo->prepare("INSERT INTO items (report_id, details_description, picture_image) VALUES (?, ?, ?)");
+        $stmtItem->execute([$primary_db_id,
+            $full_details,$photo_image
         ]);
 
         $pdo->commit();
@@ -159,23 +160,41 @@ try {
         ]);
     }
     elseif ($method === 'PATCH') {
-        if (isset($_GET['id'])) {
-            if (isset($input['location'])) {
-                $stmt = $pdo->prepare("UPDATE reports SET location = ? WHERE id = ?");
-                $stmt->execute([substr($input['location'], 0, 200), $_GET['id']]);
-            }
-            if (!empty($input['status']) || !empty($input['report_type'])) {
-                $stmt = $pdo->prepare("UPDATE reports SET date_claimed = NOW() WHERE id = ?");
-                $stmt->execute([$_GET['id']]);
-            }
-            echo json_encode(["status" => "success", "message" => "Report updated"]);
-        } else {
+        if (!isset($_GET['id'])) {
             echo json_encode(["status" => "error", "message" => "Missing ID data"]);
+            exit();
         }
+        $id = (int)$_GET['id'];
+        $action =$input['action'] ?? '';
+
+        if ($action === 'request_claim') {
+            $stmt =$pdo->prepare("UPDATE reports SET claim_status = 'PENDING', claimant_id = ?, claimant_name = ?, claimant_contact = ?, claim_note = ? WHERE id = ?");
+            $stmt->execute([
+                (int)($input['claimant_id'] ?? 0),
+                trim($input['claimant_name'] ?? 'Community Member'),
+                trim($input['claimant_contact'] ?? ''),
+                trim($input['claim_note'] ?? ''),$id
+            ]);
+        } elseif ($action === 'cancel_claim' \vert{}\vert{}$action === 'decline_claim') {
+            $stmt =$pdo->prepare("UPDATE reports SET claim_status = 'OPEN', claimant_id = NULL, claimant_name = NULL, claimant_contact = NULL, claim_note = NULL WHERE id = ?");
+            $stmt->execute([$id]);
+        } elseif ($action === 'accept_claim' || !empty($input['status']) \vert{}\vert{} !empty($input['report_type'])) {
+            $stmt =$pdo->prepare("UPDATE reports SET claim_status = 'ACCEPTED', date_claimed = NOW() WHERE id = ?");
+            $stmt->execute([$id]);
+        }
+
+        if (isset($input['location'])) {
+            $stmt =$pdo->prepare("UPDATE reports SET location = ? WHERE id = ?");
+            $stmt->execute([substr($input['location'], 0, 200),$id]);
+        }
+
+        echo json_encode(["status" => "success", "message" => "Report updated"]);
     }
     elseif ($method === 'DELETE') {
         if (isset($_GET['id'])) {
-            $stmt = $pdo->prepare("DELETE FROM reports WHERE id = ?");
+            $pdo->prepare("DELETE FROM category_report WHERE report_id = ?")->execute([$_GET['id']]);
+            $pdo->prepare("DELETE FROM items WHERE report_id = ?")->execute([$_GET['id']]);
+            $stmt =$pdo->prepare("DELETE FROM reports WHERE id = ?");
             $stmt->execute([$_GET['id']]);
             echo json_encode(["status" => "success", "message" => "Report deleted"]);
         } else {
@@ -183,8 +202,7 @@ try {
         }
     }
 } catch (Exception $e) {
-    if ($pdo->inTransaction()) {
-        $pdo->rollBack();
+    if ($pdo->inTransaction()) {$pdo->rollBack();
     }
     echo json_encode(["status" => "error", "message" => "SQL Error: " . $e->getMessage()]);
 }
